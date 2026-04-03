@@ -34,6 +34,7 @@ func main() {
 		Str("rtsp", ":"+cfg.RTSPPort).
 		Str("http", ":"+cfg.HTTPPort).
 		Str("rtmp", ":"+cfg.RTMPPort).
+		Str("dvrip", ":"+cfg.DVRIPPort).
 		Msg("[app] starting StrixCamFake")
 
 	// create streams
@@ -48,6 +49,7 @@ func main() {
 	startHTTPServer(cfg, mainStream, subStream, snap)
 	startRTMPServer(cfg.RTMPPort, mainStream, subStream)
 	startBubbleServer(cfg.BubblePort, cfg.Username, cfg.Password, mainStream, subStream)
+	startDVRIPServer(cfg.DVRIPPort, cfg.Username, cfg.Password, mainStream, subStream)
 	startWSDiscovery(cfg.HTTPPort, cfg.CameraName)
 
 	// wait for servers to bind, then start ffmpeg pushers
@@ -124,6 +126,12 @@ func printEndpoints(cfg *Config) {
 	fmt.Printf("  rtmp://%s:%s/sub\n", ip, cfg.RTMPPort)
 	fmt.Printf("  rtmp://%s:%s/bcs/channel0_sub.bcs?channel=0&stream=1&user=%s&password=%s\n", ip, cfg.RTMPPort, cfg.Username, cfg.Password)
 	fmt.Printf("  rtmp://%s:%s/bcs/channel0_ext.bcs?channel=0&stream=2&user=%s&password=%s\n", ip, cfg.RTMPPort, cfg.Username, cfg.Password)
+	fmt.Println()
+	fmt.Println("DVRIP (main):")
+	fmt.Printf("  dvrip://%s:%s@%s:%s?channel=0&subtype=0\n", cfg.Username, cfg.Password, ip, cfg.DVRIPPort)
+	fmt.Println()
+	fmt.Println("DVRIP (sub):")
+	fmt.Printf("  dvrip://%s:%s@%s:%s?channel=0&subtype=1\n", cfg.Username, cfg.Password, ip, cfg.DVRIPPort)
 	fmt.Println()
 	fmt.Println("ONVIF:")
 	fmt.Printf("  http://%s:%s/onvif/device_service       ONVIF SOAP\n", ip, cfg.HTTPPort)

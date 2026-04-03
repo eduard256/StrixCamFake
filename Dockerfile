@@ -22,6 +22,6 @@ RUN wget -q "${RELEASE_URL}/main.mp4" -O main.mp4 && \
 
 COPY --from=builder /strixcamfake /app/strixcamfake
 
-EXPOSE 554 80 1935 3702/udp
+EXPOSE 554 80 1935 34568 3702/udp
 
 CMD ["/app/strixcamfake"]
