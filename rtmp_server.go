@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"strings"
 
 	"github.com/AlexxIT/go2rtc/pkg/flv"
 	"github.com/AlexxIT/go2rtc/pkg/rtmp"
@@ -77,32 +78,40 @@ func handleRTMP(conn net.Conn, mainStream, subStream *Stream) {
 	_, _ = cons.WriteTo(c)
 }
 
+// resolveRTMPStream maps RTMP app name to main or sub stream.
+//
+// Supported patterns:
+//   - "" or "/" or "main" or "live" or "live/*" -> main (GoPro, OBS, Anpviz, TP-Link)
+//   - "sub" or "live/sub" -> sub
+//   - "floodlight-cam", "sideway-cam", any name -> main (Wyze bridge)
+//   - "/bcs/channel0_main.bcs*" -> main (Reolink)
+//   - "/bcs/channel0_sub.bcs*" -> sub (Reolink)
+//   - "/bcs/channel0_ext.bcs*" -> sub (Reolink extended)
+//   - "/bcs/channel1_main.bcs*" -> main (Reolink multi-channel)
+//   - "?stream=1" or "?stream=2" in query -> sub
 func resolveRTMPStream(app string, main, sub *Stream) *Stream {
-	switch {
-	case app == "sub":
-		return sub
-	case app == "live/sub":
-		return sub
-	// Reolink-style: channel0_sub.bcs
-	case len(app) > 4 && app[len(app)-4:] == "_sub":
-		return sub
-	case contains(app, "sub"):
-		return sub
-	case contains(app, "stream=1"):
-		return sub
-	}
-	return main
-}
+	// normalize: remove leading slash
+	app = strings.TrimPrefix(app, "/")
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsStr(s, substr))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+	// Reolink BCS style: bcs/channel0_sub.bcs, bcs/channel0_ext.bcs
+	if strings.HasPrefix(app, "bcs/") {
+		if strings.Contains(app, "_sub.") || strings.Contains(app, "_ext.") {
+			return sub
 		}
+		// stream=1 or stream=2 in query = sub
+		if strings.Contains(app, "stream=1") || strings.Contains(app, "stream=2") {
+			return sub
+		}
+		return main
 	}
-	return false
+
+	// explicit sub
+	if app == "sub" || app == "live/sub" {
+		return sub
+	}
+
+	// everything else is main:
+	// "", "main", "live", "live/BalconyCam", "live/anything",
+	// "floodlight-cam", "sideway-cam", etc.
+	return main
 }
