@@ -112,6 +112,11 @@ func startHTTPServer(cfg *Config, mainStream, subStream *Stream, snap *Snapshot)
 		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 
+	// --- Bubble protocol ---
+	mux.HandleFunc("/bubble/live", func(w http.ResponseWriter, r *http.Request) {
+		handleBubble(w, r, mainStream, subStream, cfg.Username, cfg.Password)
+	})
+
 	// --- ONVIF ---
 	mux.HandleFunc("/onvif/", func(w http.ResponseWriter, r *http.Request) {
 		handleONVIF(w, r, cfg)
