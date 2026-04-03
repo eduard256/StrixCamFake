@@ -276,6 +276,8 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 	// sendFrame receives AVCC-encoded H264 data and wraps it in bubble media packet format.
 	// Media packet: size(4 BE) + type(1) + channel(1) + annexb_data
 	//   type = 1 for keyframe, 2 for other frame (matches go2rtc bubble client.go Handle())
+	var frameCount int
+
 	sendFrame := func(pkt *rtp.Packet) {
 		if len(pkt.Payload) < 5 {
 			return
@@ -297,6 +299,17 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 				}
 				break
 			}
+		}
+
+		frameCount++
+		if frameCount <= 3 {
+			log.Debug().
+				Int("avcc_len", len(pkt.Payload)).
+				Hex("avcc_head", pkt.Payload[:min(8, len(pkt.Payload))]).
+				Int("annexb_len", len(data)).
+				Hex("annexb_head", data[:min(8, len(data))]).
+				Int("frameType", int(frameType)).
+				Msg("[bubble] sendFrame")
 		}
 
 		payload := make([]byte, 6+len(data))
