@@ -3,7 +3,7 @@ module github.com/eduard256/StrixCamFake
 go 1.26.1
 
 require (
-	github.com/AlexxIT/go2rtc v1.9.9
+	github.com/AlexxIT/go2rtc v1.9.14
 	github.com/rs/zerolog v1.34.0
 )
 
