@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/flv"
-	"github.com/AlexxIT/go2rtc/pkg/mjpeg"
 	"github.com/AlexxIT/go2rtc/pkg/mp4"
 	"github.com/AlexxIT/go2rtc/pkg/mpegts"
 	"github.com/rs/zerolog/log"
@@ -37,7 +38,7 @@ func startHTTPServer(cfg *Config, mainStream, subStream *Stream, snap *Snapshot)
 	mux.HandleFunc("/api/hls/init.mp4", handleHLSInit)
 	mux.HandleFunc("/api/hls/segment.m4s", handleHLSSegmentMP4)
 	mux.HandleFunc("/api/stream.mjpeg", func(w http.ResponseWriter, r *http.Request) {
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 	mux.HandleFunc("/api/frame.jpeg", func(w http.ResponseWriter, r *http.Request) {
 		handleJPEGSnapshot(w, r, snap)
@@ -87,28 +88,28 @@ func startHTTPServer(cfg *Config, mainStream, subStream *Stream, snap *Snapshot)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 	mux.HandleFunc("/videostream.cgi", func(w http.ResponseWriter, r *http.Request) {
 		if !checkHTTPAuth(r, cfg.Username, cfg.Password) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 	mux.HandleFunc("/videofeed", func(w http.ResponseWriter, r *http.Request) {
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 
 	// --- HTTPS-style endpoints ---
 	mux.HandleFunc("/axis-cgi/mjpg/video.cgi", func(w http.ResponseWriter, r *http.Request) {
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 	mux.HandleFunc("/video/mjpg.cgi", func(w http.ResponseWriter, r *http.Request) {
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 	mux.HandleFunc("/mjpeg/video.mjpg", func(w http.ResponseWriter, r *http.Request) {
-		handleMJPEGStream(w, r, mainStream, subStream)
+		handleMJPEGStream(w, r, mainStream, subStream, cfg.RTSPPort)
 	})
 
 	// --- ONVIF ---
@@ -218,29 +219,52 @@ func handleMP4Keyframe(w http.ResponseWriter, r *http.Request, main, sub *Stream
 	_, _ = once.WriteTo(w)
 }
 
-func handleMJPEGStream(w http.ResponseWriter, r *http.Request, main, sub *Stream) {
+// handleMJPEGStream transcodes H264 -> MJPEG via ffmpeg and outputs multipart JPEG stream.
+func handleMJPEGStream(w http.ResponseWriter, r *http.Request, main, sub *Stream, rtspPort string) {
 	stream := resolveHTTPStream(r, main, sub)
 	if !stream.HasProducer() {
 		http.Error(w, "stream not ready", http.StatusServiceUnavailable)
 		return
 	}
 
-	cons := mjpeg.NewConsumer()
-	cons.WithRequest(r)
+	// determine which internal RTSP stream to read
+	streamName := "main"
+	if stream.name == "sub" {
+		streamName = "sub"
+	}
+	rtspURL := "rtsp://127.0.0.1:" + rtspPort + "/" + streamName
 
-	if err := stream.AddConsumer(cons); err != nil {
+	cmd := exec.Command("ffmpeg",
+		"-loglevel", "error",
+		"-rtsp_transport", "tcp",
+		"-i", rtspURL,
+		"-f", "mpjpeg",
+		"-q:v", "5",
+		"-r", "10",
+		"pipe:1",
+	)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	if err := cmd.Start(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=ffmpeg")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Pragma", "no-cache")
 
-	wr := mjpeg.NewWriter(w)
-	_, _ = cons.WriteTo(wr)
+	// pipe ffmpeg mpjpeg output directly to HTTP response
+	_, _ = io.Copy(w, stdout)
 
-	stream.RemoveConsumer(cons)
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 func handleFLVStream(w http.ResponseWriter, r *http.Request, main, sub *Stream) {
