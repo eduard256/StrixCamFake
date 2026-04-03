@@ -109,9 +109,8 @@ func handleBubbleConn(conn net.Conn, username, password string, mainStream, subS
 
 	// Step 5: read start packet
 	if err := bubbleReadStart(r); err != nil {
-		// peek at what's in the buffer
-		if peeked, _ := r.Peek(10); len(peeked) > 0 {
-			log.Debug().Bytes("peek", peeked).Msg("[bubble] buffer after start fail")
+		if peeked, _ := r.Peek(32); len(peeked) > 0 {
+			log.Debug().Hex("peek", peeked).Msg("[bubble] buffer after start fail")
 		}
 		log.Debug().Err(err).Msg("[bubble] start failed")
 		return
@@ -175,24 +174,31 @@ func bubbleReadStart(r *bufio.Reader) error {
 }
 
 func bubbleReadPacket(r *bufio.Reader) (byte, []byte, error) {
-	// packet: 0xAA + size(4) + cmd(1) + ts(4) + payload
-	// size includes: cmd(1) + ts(4) + payload
+	// packet: 0xAA + size(4 BE) + cmd(1) + ts(4 BE) + payload
+	// size = 1(cmd) + 4(ts) + len(payload)
 
-	// read sync byte
-	sync, err := r.ReadByte()
-	if err != nil {
-		return 0, nil, err
-	}
-	if sync != bubbleSyncByte {
-		return 0, nil, fmt.Errorf("wrong sync byte: %02x", sync)
+	// skip non-sync bytes (in case of misalignment)
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return 0, nil, err
+		}
+		if b == bubbleSyncByte {
+			break
+		}
+		log.Debug().Hex("byte", []byte{b}).Msg("[bubble] skipping non-sync byte")
 	}
 
-	// read size (4 bytes)
+	// read size (4 bytes BE)
 	var sizeBuf [4]byte
 	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
 		return 0, nil, err
 	}
 	size := binary.BigEndian.Uint32(sizeBuf[:])
+
+	if size < 5 || size > 1024*1024 {
+		return 0, nil, fmt.Errorf("invalid packet size: %d", size)
+	}
 
 	// read cmd(1) + ts(4) + payload
 	body := make([]byte, size)
@@ -206,6 +212,8 @@ func bubbleReadPacket(r *bufio.Reader) (byte, []byte, error) {
 	if size > 5 {
 		payload = body[5:]
 	}
+
+	log.Debug().Uint8("cmd", cmd).Int("size", int(size)).Msg("[bubble] read packet")
 
 	return cmd, payload, nil
 }
