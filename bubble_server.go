@@ -276,7 +276,7 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 	// sendFrame receives AVCC-encoded H264 data and wraps it in bubble media packet format.
 	// Media packet: size(4 BE) + type(1) + channel(1) + annexb_data
 	//   type = 1 for keyframe, 2 for other frame (matches go2rtc bubble client.go Handle())
-	var frameCount int
+	var gotKeyframe bool
 
 	sendFrame := func(pkt *rtp.Packet) {
 		if len(pkt.Payload) < 5 {
@@ -296,20 +296,23 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 				nalType := data[i+4] & 0x1F
 				if nalType == 5 || nalType == 7 { // IDR or SPS
 					frameType = 1
+					if !gotKeyframe {
+						// update receiver codec FmtpLine so go2rtc WebRTC/MSE
+						// consumers can negotiate H264 profile correctly
+						if updated := h264.AVCCToCodec(pkt.Payload); updated != nil {
+							track.Codec.FmtpLine = updated.FmtpLine
+							log.Debug().Str("fmtp", track.Codec.FmtpLine).Msg("[bubble] codec updated from IFrame")
+						}
+						gotKeyframe = true
+					}
 				}
 				break
 			}
 		}
 
-		frameCount++
-		if frameCount <= 3 {
-			log.Debug().
-				Int("avcc_len", len(pkt.Payload)).
-				Hex("avcc_head", pkt.Payload[:min(8, len(pkt.Payload))]).
-				Int("annexb_len", len(data)).
-				Hex("annexb_head", data[:min(8, len(data))]).
-				Int("frameType", int(frameType)).
-				Msg("[bubble] sendFrame")
+		// don't send P-frames before the first keyframe -- client can't decode them
+		if !gotKeyframe {
+			return
 		}
 
 		payload := make([]byte, 6+len(data))
@@ -327,13 +330,6 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 			}
 		}
 	}
-
-	log.Debug().
-		Str("codec", track.Codec.Name).
-		Uint8("pt", track.Codec.PayloadType).
-		Bool("isRTP", track.Codec.IsRTP()).
-		Str("fmtp", track.Codec.FmtpLine).
-		Msg("[bubble] AddTrack")
 
 	// RTSP producers (ffmpeg via ANNOUNCE) send raw RTP packets (FU-A/STAP-A).
 	// Use track.Codec which carries the real FmtpLine with SPS/PPS for RTPDepay.
