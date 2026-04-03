@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"github.com/AlexxIT/go2rtc/pkg/h264"
 	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
 	"github.com/AlexxIT/go2rtc/pkg/tcp"
 	"github.com/pion/rtp"
@@ -139,7 +140,9 @@ func bubbleReadAuth(r *bufio.Reader, conn net.Conn, username, password string) e
 		return err
 	}
 
-	if cmd != bubblePacketAuth || len(payload) < 48 {
+	// payload after cmd+ts: size(4) + unknown(4) + user(20) + pass(20) = 48 bytes total
+	// but client sends size=44 in the size field, so payload here is 44 bytes (after stripping cmd+ts from body)
+	if cmd != bubblePacketAuth || len(payload) < 44 {
 		return fmt.Errorf("unexpected auth packet: cmd=%d len=%d", cmd, len(payload))
 	}
 
@@ -258,22 +261,28 @@ func (c *bubbleConsumer) GetMedias() []*core.Media {
 
 func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiver) error {
 	sender := core.NewSender(media, codec)
-	sender.Handler = func(pkt *rtp.Packet) {
+
+	// sendFrame receives AVCC-encoded H264 data and wraps it in bubble media packet format.
+	// Media packet: size(4 BE) + type(1) + channel(1) + annexb_data
+	//   type = 1 for keyframe, 2 for other frame (matches go2rtc bubble client.go Handle())
+	sendFrame := func(pkt *rtp.Packet) {
 		if len(pkt.Payload) < 5 {
 			return
 		}
 
+		// pkt.Payload is AVCC -- convert to Annex B for bubble wire format
 		data := annexb.DecodeAVCC(pkt.Payload, true)
+		if len(data) == 0 {
+			return
+		}
 
-		// detect keyframe from first NAL unit type
-		// Annex B: 00 00 00 01 <NAL>
-		// NAL type = nal_byte & 0x1F for H264
+		// detect keyframe: scan for first start code and check NAL type
 		frameType := byte(2) // regular frame
-		for i := 0; i < len(data)-4; i++ {
+		for i := 0; i+4 < len(data); i++ {
 			if data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
 				nalType := data[i+4] & 0x1F
 				if nalType == 5 || nalType == 7 { // IDR or SPS
-					frameType = 1 // keyframe
+					frameType = 1
 				}
 				break
 			}
@@ -282,11 +291,10 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 		payload := make([]byte, 6+len(data))
 		binary.BigEndian.PutUint32(payload, uint32(len(data)))
 		payload[4] = frameType
-		payload[5] = 0
-
+		payload[5] = 0 // channel
 		copy(payload[6:], data)
 
-		ts := pkt.Timestamp / 90 // convert 90kHz to ms
+		ts := pkt.Timestamp / 90 // 90kHz -> ms
 		if err := bubbleWritePacket(c.conn, bubblePacketMedia, ts, payload); err != nil {
 			select {
 			case <-c.done:
@@ -294,6 +302,14 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 				close(c.done)
 			}
 		}
+	}
+
+	// RTSP producers (ffmpeg via ANNOUNCE) send raw RTP packets (FU-A/STAP-A).
+	// Use track.Codec which carries the real FmtpLine with SPS/PPS for RTPDepay.
+	if track.Codec.IsRTP() {
+		sender.Handler = h264.RTPDepay(track.Codec, sendFrame)
+	} else {
+		sender.Handler = sendFrame
 	}
 
 	sender.HandleRTP(track)
