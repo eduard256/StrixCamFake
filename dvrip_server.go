@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"github.com/AlexxIT/go2rtc/pkg/h264"
 	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
 	"github.com/pion/rtp"
 	"github.com/rs/zerolog/log"
@@ -447,30 +448,26 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 
 	var seq uint32
 
-	var pktCount int
-
-	sender.Handler = func(pkt *rtp.Packet) {
+	// sendFrame receives AVCC-encoded H264 data, converts to Annex B,
+	// and wraps it in the DVRIP media packet + chunk format.
+	//
+	// DVRIP media packet format (from go2rtc ReadPacket analysis):
+	//   IFrame (0xFC): 00 00 01 FC | mediaCode(1) FPS(1) W/8(1) H/8(1) | ts(4 LE) | size(4 LE) | annexb...
+	//   PFrame (0xFD): 00 00 01 FD | size(4 LE) | annexb...
+	sendFrame := func(pkt *rtp.Packet) {
 		if len(pkt.Payload) < 5 {
 			return
 		}
 
-		// Convert AVCC to Annex B for DVRIP
+		// pkt.Payload is AVCC here -- convert to Annex B for DVRIP wire format
 		data := annexb.DecodeAVCC(pkt.Payload, true)
-
-		// Debug: log first few packets to understand the format
-		pktCount++
-		if pktCount <= 5 {
-			log.Debug().
-				Int("avcc_len", len(pkt.Payload)).
-				Hex("avcc_head", pkt.Payload[:min(16, len(pkt.Payload))]).
-				Int("annexb_len", len(data)).
-				Hex("annexb_head", data[:min(16, len(data))]).
-				Msg("[dvrip] packet debug")
+		if len(data) == 0 {
+			return
 		}
 
-		// Detect keyframe from NAL unit types
+		// Detect keyframe: scan for first start code, check NAL type
 		isKeyframe := false
-		for i := 0; i < len(data)-4; i++ {
+		for i := 0; i+4 < len(data); i++ {
 			if data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
 				nalType := data[i+4] & 0x1F
 				if nalType == 5 || nalType == 7 { // IDR or SPS
@@ -480,30 +477,8 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 			}
 		}
 
-		// Build DVRIP media packet(s) inside chunk(s)
-		//
-		// DVRIP media packet format (from go2rtc ReadPacket):
-		//   Prefix: 00 00 01 <type>
-		//
-		//   IFrame (type 0xFC):
-		//     [0..3]   = 00 00 01 FC
-		//     [4]      = media code (0x02 = H264)
-		//     [5]      = FPS (25)
-		//     [6]      = width / 8 (240 = 1920/8)
-		//     [7]      = height / 8 (135 = 1080/8)
-		//     [8..11]  = timestamp (LE)
-		//     [12..15] = payload size (LE)
-		//     [16..]   = Annex B video data
-		//
-		//   PFrame (type 0xFD):
-		//     [0..3]   = 00 00 01 FD
-		//     [4..7]   = payload size (LE, = len(data))
-		//     [8..]    = Annex B video data
-
 		var mediaPacket []byte
-
 		if isKeyframe {
-			// IFrame packet
 			mediaPacket = make([]byte, 16+len(data))
 			mediaPacket[0] = 0x00
 			mediaPacket[1] = 0x00
@@ -517,7 +492,6 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 			binary.LittleEndian.PutUint32(mediaPacket[12:], uint32(len(data)))
 			copy(mediaPacket[16:], data)
 		} else {
-			// PFrame packet
 			mediaPacket = make([]byte, 8+len(data))
 			mediaPacket[0] = 0x00
 			mediaPacket[1] = 0x00
@@ -527,22 +501,13 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 			copy(mediaPacket[8:], data)
 		}
 
-		// Wrap media packet in DVRIP chunk (20-byte header with 0xFF sync)
-		// The chunk format matches what ReadChunk in go2rtc expects:
-		//   [0]     = 0xFF
-		//   [4..7]  = session ID (LE)
-		//   [8..11] = sequence (LE)
-		//   [14..15]= command (not used for media, set to 0)
-		//   [16..19]= payload size (LE)
-		//   [20..]  = payload (media packet)
+		// Wrap in DVRIP chunk (20-byte 0xFF header)
 		chunk := make([]byte, dvripHeaderSize+len(mediaPacket))
 		chunk[0] = dvripSyncByte
 		binary.LittleEndian.PutUint32(chunk[4:], c.dc.session)
 		binary.LittleEndian.PutUint32(chunk[8:], seq)
-		// cmd = 0 for media data
 		binary.LittleEndian.PutUint32(chunk[16:], uint32(len(mediaPacket)))
 		copy(chunk[dvripHeaderSize:], mediaPacket)
-
 		seq++
 
 		c.dc.mu.Lock()
@@ -557,6 +522,15 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 				close(c.done)
 			}
 		}
+	}
+
+	// If the producer sends raw RTP packets (FU-A/STAP-A), depay them to AVCC first.
+	// RTSP producers (like ffmpeg via ANNOUNCE) use IsRTP() == true.
+	// PayloadTypeRAW producers already deliver AVCC directly.
+	if codec.IsRTP() {
+		sender.Handler = h264.RTPDepay(codec, sendFrame)
+	} else {
+		sender.Handler = sendFrame
 	}
 
 	sender.HandleRTP(track)
