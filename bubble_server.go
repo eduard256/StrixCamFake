@@ -118,6 +118,9 @@ func handleBubbleConn(conn net.Conn, username, password string, mainStream, subS
 
 	log.Debug().Str("stream", stream.name).Msg("[bubble] streaming started")
 
+	// clear all deadlines before long-running stream
+	_ = conn.SetDeadline(time.Time{})
+
 	// Step 6: stream data
 	bubbleStreamData(conn, stream)
 }
