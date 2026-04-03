@@ -1,0 +1,10 @@
+services:
+  camera:
+    build: .
+    env_file: .env
+    ports:
+      - "554:554"       # RTSP
+      - "80:80"         # HTTP (web UI, snapshots, HLS, MP4, MJPEG, FLV, ONVIF)
+      - "1935:1935"     # RTMP
+      - "3702:3702/udp" # ONVIF WS-Discovery
+    restart: unless-stopped
