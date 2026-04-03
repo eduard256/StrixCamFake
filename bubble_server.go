@@ -104,8 +104,14 @@ func handleBubbleConn(conn net.Conn, username, password string, mainStream, subS
 		return
 	}
 
+	log.Debug().Msg("[bubble] auth OK, waiting for start")
+
 	// Step 5: read start packet
 	if err := bubbleReadStart(r); err != nil {
+		// peek at what's in the buffer
+		if peeked, _ := r.Peek(10); len(peeked) > 0 {
+			log.Debug().Bytes("peek", peeked).Msg("[bubble] buffer after start fail")
+		}
 		log.Debug().Err(err).Msg("[bubble] start failed")
 		return
 	}
@@ -240,12 +246,24 @@ func (c *bubbleConsumer) GetMedias() []*core.Media {
 func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiver) error {
 	sender := core.NewSender(media, codec)
 	sender.Handler = func(pkt *rtp.Packet) {
+		if len(pkt.Payload) < 5 {
+			return
+		}
+
 		data := annexb.DecodeAVCC(pkt.Payload, true)
 
-		// type: 1=keyframe, 2=other
-		frameType := byte(2)
-		if pkt.Marker {
-			frameType = 1
+		// detect keyframe from first NAL unit type
+		// Annex B: 00 00 00 01 <NAL>
+		// NAL type = nal_byte & 0x1F for H264
+		frameType := byte(2) // regular frame
+		for i := 0; i < len(data)-4; i++ {
+			if data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
+				nalType := data[i+4] & 0x1F
+				if nalType == 5 || nalType == 7 { // IDR or SPS
+					frameType = 1 // keyframe
+				}
+				break
+			}
 		}
 
 		payload := make([]byte, 6+len(data))
@@ -255,7 +273,8 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 
 		copy(payload[6:], data)
 
-		if err := bubbleWritePacket(c.conn, bubblePacketMedia, pkt.Timestamp/90, payload); err != nil {
+		ts := pkt.Timestamp / 90 // convert 90kHz to ms
+		if err := bubbleWritePacket(c.conn, bubblePacketMedia, ts, payload); err != nil {
 			select {
 			case <-c.done:
 			default:
