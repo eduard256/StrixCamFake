@@ -4,13 +4,15 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
-	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
+	"github.com/AlexxIT/go2rtc/pkg/tcp"
 	"github.com/pion/rtp"
 	"github.com/rs/zerolog/log"
 )
@@ -23,11 +25,50 @@ const (
 	bubbleTimeout     = 5 * time.Second
 )
 
-// handleBubble serves the bubble protocol over HTTP.
-// Client connects to /bubble/live?ch=0&stream=0, gets upgraded to binary protocol.
-func handleBubble(w http.ResponseWriter, r *http.Request, mainStream, subStream *Stream, username, password string) {
-	q := r.URL.Query()
-	streamIdx := q.Get("stream") // 0=main, 1=sub
+// startBubbleServer starts a raw TCP server for the bubble protocol.
+// go2rtc bubble client connects via TCP, sends raw HTTP GET, then switches to binary.
+func startBubbleServer(port, username, password string, mainStream, subStream *Stream) {
+	addr := ":" + port
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Error().Err(err).Msg("[bubble] listen failed")
+		return
+	}
+
+	log.Info().Str("addr", addr).Msg("[bubble] listening")
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				log.Error().Err(err).Msg("[bubble] accept")
+				return
+			}
+			go handleBubbleConn(conn, username, password, mainStream, subStream)
+		}
+	}()
+}
+
+func handleBubbleConn(conn net.Conn, username, password string, mainStream, subStream *Stream) {
+	defer conn.Close()
+
+	r := bufio.NewReader(conn)
+
+	// Step 1: read HTTP GET request
+	_ = conn.SetReadDeadline(time.Now().Add(bubbleTimeout))
+
+	req, err := tcp.ReadRequest(r)
+	if err != nil {
+		log.Debug().Err(err).Msg("[bubble] read request")
+		return
+	}
+
+	log.Debug().Str("path", req.URL.Path).Str("remote", conn.RemoteAddr().String()).Msg("[bubble] connection")
+
+	// parse stream index from query
+	q := req.URL.Query()
+	streamIdx := q.Get("stream")
 
 	stream := mainStream
 	if streamIdx == "1" {
@@ -35,48 +76,43 @@ func handleBubble(w http.ResponseWriter, r *http.Request, mainStream, subStream 
 	}
 
 	if !stream.HasProducer() {
-		http.Error(w, "stream not ready", http.StatusServiceUnavailable)
+		log.Debug().Msg("[bubble] stream not ready")
 		return
 	}
 
-	// hijack the connection to get raw TCP access
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "hijack not supported", http.StatusInternalServerError)
+	// Step 2: send HTTP 200 response
+	res := &tcp.Response{Status: "200 OK", Header: map[string][]string{
+		"Content-Type": {"video/bubble"},
+	}, Request: req}
+
+	_ = conn.SetWriteDeadline(time.Now().Add(bubbleTimeout))
+	if err := res.Write(conn); err != nil {
+		log.Debug().Err(err).Msg("[bubble] write response")
 		return
 	}
 
-	conn, buf, err := hj.Hijack()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer conn.Close()
-
-	log.Debug().Str("remote", conn.RemoteAddr().String()).Msg("[bubble] new connection")
-
-	// Step 1: send HTTP 200 response
-	_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: video/bubble\r\n\r\n"))
-
-	// Step 2: send XML device description (padded to 1024 bytes)
+	// Step 3: send XML device description (padded to 1024 bytes)
 	xml := buildBubbleXML()
-	_, _ = conn.Write(xml)
+	if _, err := conn.Write(xml); err != nil {
+		log.Debug().Err(err).Msg("[bubble] write xml")
+		return
+	}
 
-	// Step 3: read auth packet
-	if err := bubbleReadAuth(buf.Reader, conn, username, password); err != nil {
+	// Step 4: read auth packet
+	if err := bubbleReadAuth(r, conn, username, password); err != nil {
 		log.Debug().Err(err).Msg("[bubble] auth failed")
 		return
 	}
 
-	// Step 4: read start packet
-	if err := bubbleReadStart(buf.Reader); err != nil {
+	// Step 5: read start packet
+	if err := bubbleReadStart(r); err != nil {
 		log.Debug().Err(err).Msg("[bubble] start failed")
 		return
 	}
 
 	log.Debug().Str("stream", stream.name).Msg("[bubble] streaming started")
 
-	// Step 5: create a consumer that captures RTP packets and sends as bubble media
+	// Step 6: stream data
 	bubbleStreamData(conn, stream)
 }
 
@@ -86,7 +122,6 @@ func buildBubbleXML() []byte {
 		`<stream1 name="360p.264" size="640x360" x1="yes" x2="yes" x4="yes" />` +
 		`</vin0></bubble>`
 
-	// pad to exactly 1024 bytes (as real cameras do)
 	b := make([]byte, 1024)
 	copy(b, xml)
 	return b
@@ -106,16 +141,15 @@ func bubbleReadAuth(r *bufio.Reader, conn net.Conn, username, password string) e
 	user := strings.TrimRight(string(payload[8:28]), "\x00")
 	pass := strings.TrimRight(string(payload[28:48]), "\x00")
 
-	if username != "" && (user != username || pass != password) {
-		log.Debug().Str("user", user).Msg("[bubble] wrong credentials")
-		// still send OK -- some cameras don't validate auth
-	}
+	_ = user
+	_ = pass
+	// real cameras often don't validate -- just accept
 
 	// send auth OK response
 	resp := make([]byte, 44)
 	binary.BigEndian.PutUint32(resp, 40)
-	resp[4] = 3 // auth OK flag
-	resp[8] = 1 // success
+	resp[4] = 3
+	resp[8] = 1
 
 	return bubbleWritePacket(conn, bubblePacketAuth, 0x0E16C271, resp)
 }
@@ -132,9 +166,8 @@ func bubbleReadStart(r *bufio.Reader) error {
 }
 
 func bubbleReadPacket(r *bufio.Reader) (byte, []byte, error) {
-	// 0xAA + size(uint32) + cmd(byte) + ts(uint32) + payload
 	hdr := make([]byte, 10)
-	if _, err := r.Read(hdr); err != nil {
+	if _, err := io.ReadFull(r, hdr); err != nil {
 		return 0, nil, err
 	}
 
@@ -143,14 +176,13 @@ func bubbleReadPacket(r *bufio.Reader) (byte, []byte, error) {
 	}
 
 	size := binary.BigEndian.Uint32(hdr[1:])
-	payload := make([]byte, size-1-4)
-	n := 0
-	for n < len(payload) {
-		nn, err := r.Read(payload[n:])
-		if err != nil {
-			return 0, nil, err
-		}
-		n += nn
+	if size < 5 {
+		return hdr[5], nil, nil
+	}
+
+	payload := make([]byte, size-5)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return 0, nil, err
 	}
 
 	return hdr[5], payload, nil
@@ -170,15 +202,12 @@ func bubbleWritePacket(conn net.Conn, cmd byte, ts uint32, payload []byte) error
 	return err
 }
 
-// bubbleStreamData connects to the stream as a consumer and sends H264 frames via bubble protocol.
 func bubbleStreamData(conn net.Conn, stream *Stream) {
-	// create a simple consumer that receives video packets
 	cons := &bubbleConsumer{
-		conn:   conn,
-		stream: stream,
+		conn: conn,
+		done: make(chan struct{}),
 	}
 
-	// set up media -- we want video H264
 	cons.medias = []*core.Media{
 		{
 			Kind:      core.KindVideo,
@@ -194,16 +223,14 @@ func bubbleStreamData(conn net.Conn, stream *Stream) {
 
 	defer stream.RemoveConsumer(cons)
 
-	// block until connection closes
 	<-cons.done
 }
 
 type bubbleConsumer struct {
-	conn    net.Conn
-	stream  *Stream
-	medias  []*core.Media
-	sender  *core.Sender
-	done    chan struct{}
+	conn   net.Conn
+	medias []*core.Media
+	sender *core.Sender
+	done   chan struct{}
 }
 
 func (c *bubbleConsumer) GetMedias() []*core.Media {
@@ -211,15 +238,11 @@ func (c *bubbleConsumer) GetMedias() []*core.Media {
 }
 
 func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiver) error {
-	c.done = make(chan struct{})
-
 	sender := core.NewSender(media, codec)
 	sender.Handler = func(pkt *rtp.Packet) {
-		// convert AVCC to Annex B for bubble protocol
 		data := annexb.DecodeAVCC(pkt.Payload, true)
 
-		// bubble media packet: size(4) + type(1) + channel(1) + data
-		// type: 1=keyframe, 2=other frame
+		// type: 1=keyframe, 2=other
 		frameType := byte(2)
 		if pkt.Marker {
 			frameType = 1
@@ -228,12 +251,16 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 		payload := make([]byte, 6+len(data))
 		binary.BigEndian.PutUint32(payload, uint32(len(data)))
 		payload[4] = frameType
-		payload[5] = 0 // channel
+		payload[5] = 0
 
 		copy(payload[6:], data)
 
 		if err := bubbleWritePacket(c.conn, bubblePacketMedia, pkt.Timestamp/90, payload); err != nil {
-			close(c.done)
+			select {
+			case <-c.done:
+			default:
+				close(c.done)
+			}
 		}
 	}
 
@@ -247,5 +274,13 @@ func (c *bubbleConsumer) Stop() error {
 	if c.sender != nil {
 		c.sender.Close()
 	}
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
 	return c.conn.Close()
 }
+
+// ensure imports are used
+var _ = url.Parse

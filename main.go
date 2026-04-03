@@ -47,6 +47,7 @@ func main() {
 	startRTSPServer(cfg.RTSPPort, cfg.Username, cfg.Password, mainStream, subStream)
 	startHTTPServer(cfg, mainStream, subStream, snap)
 	startRTMPServer(cfg.RTMPPort, mainStream, subStream)
+	startBubbleServer(cfg.BubblePort, cfg.Username, cfg.Password, mainStream, subStream)
 	startWSDiscovery(cfg.HTTPPort, cfg.CameraName)
 
 	// wait for servers to bind, then start ffmpeg pushers
@@ -115,6 +116,10 @@ func printEndpoints(cfg *Config) {
 	fmt.Println("RTMP:")
 	fmt.Printf("  rtmp://%s:%s/main                       Main stream\n", ip, cfg.RTMPPort)
 	fmt.Printf("  rtmp://%s:%s/sub                        Sub stream\n", ip, cfg.RTMPPort)
+	fmt.Println()
+	fmt.Println("Bubble:")
+	fmt.Printf("  bubble://%s:%s/bubble/live?ch=0&stream=0  Main\n", ip, cfg.BubblePort)
+	fmt.Printf("  bubble://%s:%s/bubble/live?ch=0&stream=1  Sub\n", ip, cfg.BubblePort)
 	fmt.Println()
 	fmt.Println("ONVIF:")
 	fmt.Printf("  http://%s:%s/onvif/device_service       ONVIF SOAP\n", ip, cfg.HTTPPort)

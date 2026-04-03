@@ -13,9 +13,10 @@ type Config struct {
 	Username string
 	Password string
 
-	RTSPPort string
-	HTTPPort string
-	RTMPPort string
+	RTSPPort   string
+	HTTPPort   string
+	RTMPPort   string
+	BubblePort string
 
 	CameraName     string
 	CameraModel    string
@@ -34,6 +35,7 @@ func LoadConfig() *Config {
 		RTSPPort:         env("RTSP_PORT", "554"),
 		HTTPPort:         env("HTTP_PORT", "80"),
 		RTMPPort:         env("RTMP_PORT", "1935"),
+		BubblePort:       env("BUBBLE_PORT", "34567"),
 		CameraName:       env("CAMERA_NAME", "StrixCam"),
 		CameraModel:      env("CAMERA_MODEL", "SFC-2000"),
 		CameraSerial:     env("CAMERA_SERIAL", "SFC-001"),
