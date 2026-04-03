@@ -315,6 +315,13 @@ func (c *bubbleConsumer) AddTrack(media *core.Media, codec *core.Codec, track *c
 		}
 	}
 
+	log.Debug().
+		Str("codec", track.Codec.Name).
+		Uint8("pt", track.Codec.PayloadType).
+		Bool("isRTP", track.Codec.IsRTP()).
+		Str("fmtp", track.Codec.FmtpLine).
+		Msg("[bubble] AddTrack")
+
 	// RTSP producers (ffmpeg via ANNOUNCE) send raw RTP packets (FU-A/STAP-A).
 	// Use track.Codec which carries the real FmtpLine with SPS/PPS for RTPDepay.
 	if track.Codec.IsRTP() {
