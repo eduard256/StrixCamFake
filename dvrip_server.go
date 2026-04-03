@@ -447,6 +447,8 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 
 	var seq uint32
 
+	var pktCount int
+
 	sender.Handler = func(pkt *rtp.Packet) {
 		if len(pkt.Payload) < 5 {
 			return
@@ -454,6 +456,17 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 
 		// Convert AVCC to Annex B for DVRIP
 		data := annexb.DecodeAVCC(pkt.Payload, true)
+
+		// Debug: log first few packets to understand the format
+		pktCount++
+		if pktCount <= 5 {
+			log.Debug().
+				Int("avcc_len", len(pkt.Payload)).
+				Hex("avcc_head", pkt.Payload[:min(16, len(pkt.Payload))]).
+				Int("annexb_len", len(data)).
+				Hex("annexb_head", data[:min(16, len(data))]).
+				Msg("[dvrip] packet debug")
+		}
 
 		// Detect keyframe from NAL unit types
 		isKeyframe := false
