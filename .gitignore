@@ -1,0 +1,19 @@
+# Video assets (downloaded from GitHub Release)
+*.mp4
+*.MP4
+
+# Binary
+StrixCamFake
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
