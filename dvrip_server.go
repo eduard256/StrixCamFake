@@ -526,9 +526,10 @@ func (c *dvripConsumer) AddTrack(media *core.Media, codec *core.Codec, track *co
 
 	// If the producer sends raw RTP packets (FU-A/STAP-A), depay them to AVCC first.
 	// RTSP producers (like ffmpeg via ANNOUNCE) use IsRTP() == true.
+	// Use track.Codec (not consumer codec) because it carries the real FmtpLine with SPS/PPS.
 	// PayloadTypeRAW producers already deliver AVCC directly.
-	if codec.IsRTP() {
-		sender.Handler = h264.RTPDepay(codec, sendFrame)
+	if track.Codec.IsRTP() {
+		sender.Handler = h264.RTPDepay(track.Codec, sendFrame)
 	} else {
 		sender.Handler = sendFrame
 	}
