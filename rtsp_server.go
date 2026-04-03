@@ -40,7 +40,8 @@ func startRTSPServer(port, username, password string, mainStream, subStream *Str
 func handleRTSP(conn net.Conn, username, password string, mainStream, subStream *Stream) {
 	c := rtsp.NewServer(conn)
 
-	if username != "" {
+	// skip auth for loopback (ffmpeg pushes from 127.0.0.1)
+	if username != "" && !conn.RemoteAddr().(*net.TCPAddr).IP.IsLoopback() {
 		c.Auth(username, password)
 	}
 

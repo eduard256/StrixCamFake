@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"os/exec"
 	"sync"
 	"time"
@@ -55,6 +57,7 @@ func StartSnapshotLoop(snap *Snapshot, rtspPort string, interval time.Duration) 
 func captureSnapshot(rtspURL string) ([]byte, error) {
 	// grab one frame from RTSP, output as JPEG to stdout
 	cmd := exec.Command("ffmpeg",
+		"-loglevel", "error",
 		"-rtsp_transport", "tcp",
 		"-i", rtspURL,
 		"-frames:v", "1",
@@ -64,5 +67,19 @@ func captureSnapshot(rtspURL string) ([]byte, error) {
 		"pipe:1",
 	)
 
-	return cmd.Output()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	_ = cmd.Run()
+
+	if stdout.Len() > 0 {
+		return stdout.Bytes(), nil
+	}
+
+	if stderr.Len() > 0 {
+		return nil, fmt.Errorf("%s", stderr.String())
+	}
+
+	return nil, fmt.Errorf("no output")
 }

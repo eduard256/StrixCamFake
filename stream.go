@@ -30,9 +30,6 @@ func (s *Stream) SetProducer(prod core.Producer) {
 	s.receivers = nil
 
 	for _, media := range prod.GetMedias() {
-		if media.Direction != core.DirectionRecvonly {
-			continue
-		}
 		for _, codec := range media.Codecs {
 			track, err := prod.GetTrack(media, codec)
 			if err != nil {
@@ -49,11 +46,12 @@ func (s *Stream) AddConsumer(cons core.Consumer) error {
 	defer s.mu.Unlock()
 
 	for _, consMedia := range cons.GetMedias() {
-		if consMedia.Direction != core.DirectionSendonly {
-			continue
-		}
 		for _, receiver := range s.receivers {
 			prodCodec := receiver.Codec
+			// match by kind (video/audio)
+			if consMedia.Kind != core.GetKind(prodCodec.Name) {
+				continue
+			}
 			consCodec := consMedia.MatchCodec(prodCodec)
 			if consCodec == nil {
 				continue
