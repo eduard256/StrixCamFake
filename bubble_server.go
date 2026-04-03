@@ -172,26 +172,39 @@ func bubbleReadStart(r *bufio.Reader) error {
 }
 
 func bubbleReadPacket(r *bufio.Reader) (byte, []byte, error) {
-	hdr := make([]byte, 10)
-	if _, err := io.ReadFull(r, hdr); err != nil {
+	// packet: 0xAA + size(4) + cmd(1) + ts(4) + payload
+	// size includes: cmd(1) + ts(4) + payload
+
+	// read sync byte
+	sync, err := r.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	if sync != bubbleSyncByte {
+		return 0, nil, fmt.Errorf("wrong sync byte: %02x", sync)
+	}
+
+	// read size (4 bytes)
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
+		return 0, nil, err
+	}
+	size := binary.BigEndian.Uint32(sizeBuf[:])
+
+	// read cmd(1) + ts(4) + payload
+	body := make([]byte, size)
+	if _, err := io.ReadFull(r, body); err != nil {
 		return 0, nil, err
 	}
 
-	if hdr[0] != bubbleSyncByte {
-		return 0, nil, fmt.Errorf("wrong sync byte: %02x", hdr[0])
+	cmd := body[0]
+	// ts := binary.BigEndian.Uint32(body[1:5])
+	var payload []byte
+	if size > 5 {
+		payload = body[5:]
 	}
 
-	size := binary.BigEndian.Uint32(hdr[1:])
-	if size < 5 {
-		return hdr[5], nil, nil
-	}
-
-	payload := make([]byte, size-5)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return 0, nil, err
-	}
-
-	return hdr[5], payload, nil
+	return cmd, payload, nil
 }
 
 func bubbleWritePacket(conn net.Conn, cmd byte, ts uint32, payload []byte) error {
