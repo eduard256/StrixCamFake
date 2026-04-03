@@ -34,7 +34,7 @@ func handleONVIF(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	case onvif.ServiceGetServiceCapabilities,
 		onvif.DeviceGetNetworkInterfaces,
 		onvif.DeviceGetSystemDateAndTime,
-		onvif.DeviceSetSystemDateAndTime,
+		"SetSystemDateAndTime",
 		onvif.DeviceGetDiscoveryMode,
 		onvif.DeviceGetDNS,
 		onvif.DeviceGetHostname,
@@ -42,10 +42,10 @@ func handleONVIF(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		onvif.DeviceGetNetworkProtocols,
 		onvif.DeviceGetNTP,
 		onvif.DeviceGetScopes,
-		onvif.MediaGetVideoEncoderConfiguration,
+		"GetVideoEncoderConfiguration",
 		onvif.MediaGetVideoEncoderConfigurations,
 		onvif.MediaGetAudioEncoderConfigurations,
-		onvif.MediaGetVideoEncoderConfigurationOptions,
+		"GetVideoEncoderConfigurationOptions",
 		onvif.MediaGetAudioSources,
 		onvif.MediaGetAudioSourceConfigurations:
 		resp = onvif.StaticResponse(operation)
