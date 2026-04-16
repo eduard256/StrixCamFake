@@ -113,9 +113,15 @@ func startHTTPServer(cfg *Config, mainStream, subStream *Stream, snap *Snapshot)
 	})
 
 	// --- ONVIF ---
-	mux.HandleFunc("/onvif/", func(w http.ResponseWriter, r *http.Request) {
-		handleONVIF(w, r, cfg)
-	})
+	// Only expose the SOAP endpoint when ONVIF is explicitly enabled.
+	// When disabled, the /onvif/ prefix is not registered at all, so the
+	// default ServeMux returns a plain 404 -- indistinguishable from a
+	// device that has no ONVIF support.
+	if cfg.ONVIFEnabled {
+		mux.HandleFunc("/onvif/", func(w http.ResponseWriter, r *http.Request) {
+			handleONVIF(w, r, cfg)
+		})
+	}
 
 	// --- Web UI (minimal login page) ---
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

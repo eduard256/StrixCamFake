@@ -40,8 +40,10 @@ If build fails -- fix locally, commit, push, repeat.
 
 ### Step 3: Restart the service
 
+The service is managed by systemd (`strixcamfake.service`).
+
 ```bash
-ssh user@10.0.10.51 'sudo pkill -9 strixcamfake; sudo pkill -9 ffmpeg; sleep 1; cd ~/StrixCamFake && sudo nohup ./strixcamfake > /tmp/strixcamfake.log 2>&1 &'
+ssh user@10.0.10.51 'sudo systemctl restart strixcamfake && echo "RESTARTED OK"'
 ```
 
 ### Step 4: Verify it's running
@@ -50,7 +52,7 @@ Wait 5 seconds for ffmpeg producers to connect, then run quick checks:
 
 ```bash
 sleep 5
-ssh user@10.0.10.51 'ps aux | grep strixcamfake | grep -v grep'
+ssh user@10.0.10.51 'sudo systemctl status strixcamfake --no-pager'
 ```
 
 Then test at least one RTSP stream and one HTTP endpoint:
@@ -67,5 +69,6 @@ Tell the user whether deploy was successful and what was verified.
 ## Troubleshooting
 
 - If `git pull` fails with conflicts: `ssh user@10.0.10.51 'cd ~/StrixCamFake && git checkout -- . && git pull'`
-- If port already in use: the pkill in Step 3 handles this
-- To check logs: `ssh user@10.0.10.51 'tail -30 /tmp/strixcamfake.log'`
+- If port already in use: `sudo systemctl restart strixcamfake` handles this (kills old process automatically)
+- To check logs: `ssh user@10.0.10.51 'sudo journalctl -u strixcamfake -n 30 --no-pager'`
+- To follow logs live: `ssh user@10.0.10.51 'sudo journalctl -u strixcamfake -f'`

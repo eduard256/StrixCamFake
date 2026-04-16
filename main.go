@@ -50,7 +50,12 @@ func main() {
 	startRTMPServer(cfg.RTMPPort, mainStream, subStream)
 	startBubbleServer(cfg.BubblePort, cfg.Username, cfg.Password, mainStream, subStream)
 	startDVRIPServer(cfg.DVRIPPort, cfg.Username, cfg.Password, mainStream, subStream)
-	startWSDiscovery(cfg.HTTPPort, cfg.CameraName)
+	// WS-Discovery is part of the ONVIF stack: if ONVIF is disabled we must
+	// not advertise the camera on the multicast group at all, otherwise
+	// clients would discover us and then fail on the (missing) SOAP endpoint.
+	if cfg.ONVIFEnabled {
+		startWSDiscovery(cfg.HTTPPort, cfg.CameraName)
+	}
 
 	// wait for servers to bind, then start ffmpeg pushers
 	time.Sleep(500 * time.Millisecond)
@@ -133,9 +138,13 @@ func printEndpoints(cfg *Config) {
 	fmt.Println("DVRIP (sub):")
 	fmt.Printf("  dvrip://%s:%s@%s:%s?channel=0&subtype=1\n", cfg.Username, cfg.Password, ip, cfg.DVRIPPort)
 	fmt.Println()
-	fmt.Println("ONVIF:")
-	fmt.Printf("  http://%s:%s/onvif/device_service       ONVIF SOAP\n", ip, cfg.HTTPPort)
-	fmt.Printf("  WS-Discovery on 239.255.255.250:3702\n")
+	if cfg.ONVIFEnabled {
+		fmt.Println("ONVIF:")
+		fmt.Printf("  http://%s:%s/onvif/device_service       ONVIF SOAP\n", ip, cfg.HTTPPort)
+		fmt.Printf("  WS-Discovery on 239.255.255.250:3702\n")
+	} else {
+		fmt.Println("ONVIF: disabled (set ONVIF_ENABLED=true to enable)")
+	}
 	fmt.Println()
 }
 

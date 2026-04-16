@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,12 @@ type Config struct {
 	CameraSerial   string
 	CameraFirmware string
 
+	// ONVIFEnabled controls whether ONVIF is exposed at all.
+	// When false: the /onvif/ SOAP endpoint is not registered on the HTTP
+	// server and the WS-Discovery multicast responder is not started, so the
+	// camera appears to have no ONVIF support from the network's point of view.
+	ONVIFEnabled bool
+
 	SnapshotInterval time.Duration
 }
 
@@ -42,6 +49,7 @@ func LoadConfig() *Config {
 		CameraModel:      env("CAMERA_MODEL", "SFC-2000"),
 		CameraSerial:     env("CAMERA_SERIAL", "SFC-001"),
 		CameraFirmware:   env("CAMERA_FIRMWARE", "1.0.0"),
+		ONVIFEnabled:     envBool("ONVIF_ENABLED", true),
 		SnapshotInterval: 5 * time.Second,
 	}
 
@@ -59,4 +67,24 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool parses a boolean environment variable.
+// Accepted truthy values: "1", "true", "yes", "on" (case-insensitive).
+// Accepted falsy values: "0", "false", "no", "off" (case-insensitive).
+// Empty or unrecognized values fall back to the provided default, so typos
+// keep the safer default behavior instead of silently flipping the flag.
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }
